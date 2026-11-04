@@ -1,0 +1,80 @@
+# ============================================================
+#  NASTAVENÍ BOTA – tohle je jediný soubor, který upravuješ
+# ============================================================
+
+# Každé hledání = jeden model, který chceš hlídat.
+# bazos_query  = co se napíše do vyhledávání na auto.bazos.cz
+# sauto_model  = značka:model z adresy na Sauto
+#                (sauto.cz/inzerce/osobni/skoda/octavia -> "skoda:octavia")
+#                když Sauto hlídat nechceš, smaž řádek
+searches:
+  - name: "Octavia"
+    bazos_query: "octavia"
+    sauto_model: "skoda:octavia"
+    price_min: 20000
+    price_max: 120000
+    year_min: 2006          # starší auta se ignorují (nepovinné)
+    km_max: 300000          # víc najeto se ignoruje (nepovinné)
+
+  - name: "Fabia"
+    bazos_query: "fabia"
+    sauto_model: "skoda:fabia"
+    price_min: 15000
+    price_max: 80000
+
+  - name: "Golf"
+    bazos_query: "golf"
+    sauto_model: "volkswagen:golf"
+    price_min: 20000
+    price_max: 120000
+
+# Kdy ti má přijít zpráva
+notify:
+  min_discount_pct: 12      # auto je aspoň o 12 % levnější než medián trhu
+  on_keywords: true         # nebo inzerát obsahuje klíčové slovo (spěchá, dědictví...)
+  max_per_run: 15           # pojistka proti zahlcení zprávami
+
+# Ocenění
+valuation:
+  costs: 15000              # tvoje náklady na auto (přepis, STK, čištění, rezerva) v Kč
+  sale_discount_pct: 5      # o kolik % pod mediánem inzerátů reálně prodáš (smlouvání)
+  min_comparables: 5        # minimum podobných aut pro přesnější srovnání
+
+# Slova, která často znamenají výhodnou koupi
+keywords:
+  - "spěchá"
+  - "rychlé jednání"
+  - "nutno prodat"
+  - "stěhování"
+  - "dědictví"
+  - "po dědovi"
+  - "kontrolka"
+  - "bez stk"
+  - "nepojízdn"
+  - "na opravu"
+  - "závada"
+
+# Inzeráty s těmito slovy se úplně přeskočí
+exclude:
+  - "koupím"
+  - "koupim"
+  - "vykoupím"
+  - "výkup"
+  - "pronájem"
+
+# Kolik stránek výsledků procházet (Bazoš 20/str., Sauto 100/str.)
+pages:
+  bazos: 5
+  sauto: 2
+
+# Slovní zhodnocení od Claude (stojí pár haléřů za inzerát)
+# Zapneš: enabled: true + nastavíš ANTHROPIC_API_KEY (viz NAVOD.md)
+claude:
+  enabled: false
+  model: "claude-haiku-5-5"
+
+# Telegram – na GitHubu NECHEJ PRÁZDNÉ (použij Secrets).
+# Na vlastním PC sem můžeš token a chat_id napsat přímo.
+telegram:
+  token: ""
+  chat_id: ""
