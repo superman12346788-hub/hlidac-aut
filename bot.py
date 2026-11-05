@@ -68,6 +68,94 @@ def parse_km(text):
     return None
 
 
+DIESEL_TOKENS = ["tdi", "tdci", "cdti", "hdi", "bluehdi", "dci", "crdi", "jtd", "multijet", "cdi", "sdi", "d4d", "diesel", "nafta"]
+PETROL_TOKENS = ["tsi", "tfsi", "fsi", "mpi", "htp", "ecoboost", "vtec", "benzín", "benzin"]
+ENGINE_TYPES = ["tfsi", "tsi", "fsi", "mpi", "htp", "tdci", "tdi", "cdti", "bluehdi", "hdi", "dci", "crdi",
+                "jtd", "multijet", "cdi", "sdi", "ecoboost", "g-tec"]
+TRIMS = ["vrs", "rs", "scout", "gti", "gtd", "gte", "r-line", "sportline", "laurin", "l&k"]
+DISP_RE = re.compile(r"(?<![\d.,])([0-6][.,]\d)(?![\d])\s*(?:l\b)?")
+KW_RE = re.compile(r"(?<!\d)(\d{2,3})\s*kw\b", re.I)
+HP_RE = re.compile(r"(?<!\d)(\d{2,3})\s*(?:ps|hp|koní|koni|k)\b", re.I)
+
+
+def has_token(text, tok):
+    return re.search(rf"(?<![a-z]){re.escape(tok)}(?![a-z])", text) is not None
+
+
+def parse_specs(title, desc, extra=None):
+    """Z názvu/popisu vytáhne motor, výkon, palivo, převodovku, karoserii a verzi.
+    Název má přednost (popis často zmiňuje jiná auta / díly)."""
+    extra = extra or {}
+    t = (title or "").lower()
+    full = f"{t} {(desc or '').lower()}"
+
+    disp = extra.get("disp")
+    if not disp:
+        m = DISP_RE.search(t) or DISP_RE.search(full)
+        disp = m.group(1).replace(",", ".") if m else None
+
+    etype = next((e for e in ENGINE_TYPES if has_token(t, e)), None) \
+        or next((e for e in ENGINE_TYPES if has_token(full, e)), None)
+
+    kw = extra.get("kw")
+    if not kw:
+        m = KW_RE.search(t) or KW_RE.search(full)
+        if m:
+            kw = int(m.group(1))
+        else:
+            m = HP_RE.search(t)
+            kw = round(int(m.group(1)) * 0.7355) if m else None
+    if kw and not 30 <= kw <= 450:
+        kw = None
+
+    fuel = extra.get("fuel")
+    if not fuel:
+        if has_token(full, "lpg"):
+            fuel = "LPG"
+        elif has_token(full, "cng") or has_token(full, "g-tec"):
+            fuel = "CNG"
+        elif any(has_token(full, x) for x in DIESEL_TOKENS):
+            fuel = "nafta"
+        elif any(has_token(full, x) for x in PETROL_TOKENS):
+            fuel = "benzín"
+
+    gearbox = extra.get("gearbox")
+    if not gearbox:
+        if any(x in full for x in ["dsg", "automat", "tiptronic", "s tronic", "s-tronic", "multitronic"]):
+            gearbox = "automat"
+        else:
+            gearbox = "manuál"          # neuvedeno = skoro vždy manuál
+
+    body = extra.get("body")
+    if not body:
+        body = "kombi" if any(x in full for x in ["combi", "kombi", "variant", "touring", "avant", "estate", "sw "]) \
+            else "standard"
+
+    trim = next((x.upper() for x in TRIMS if has_token(t, x)), None) or "standard"
+    if trim == "VRS":
+        trim = "RS"
+
+    engine = f"{disp} {etype.upper()}" if disp and etype else (disp or (etype.upper() if etype else None))
+    return {"disp": disp, "engine": engine, "kw": kw, "fuel": fuel,
+            "gearbox": gearbox, "body": body, "trim": trim}
+
+
+def specs_label(l):
+    parts = []
+    if l.get("engine"):
+        parts.append(l["engine"] + (f" {l['kw']} kW" if l.get("kw") else ""))
+    elif l.get("kw"):
+        parts.append(f"{l['kw']} kW")
+    for k in ("fuel", "gearbox"):
+        if l.get(k):
+            parts.append(l[k])
+    if l.get("body") == "kombi":
+        parts.append("kombi")
+    if l.get("trim") and l["trim"] != "standard":
+        parts.append(l["trim"])
+    return " · ".join(parts)
+
+
 # ---------------------------------------------------------------- zdroje
 
 def fetch_bazos(s, pages):
@@ -106,7 +194,7 @@ def fetch_bazos(s, pages):
             loc_el = it.select_one(".inzeratylok")
             desc = desc_el.get_text(" ", strip=True) if desc_el else ""
             text = f"{title} {desc}"
-            out.append({
+            l = {
                 "id": "bazos:" + m.group(1),
                 "source": "Bazoš",
                 "title": title,
@@ -117,11 +205,47 @@ def fetch_bazos(s, pages):
                 "image": img_el.get("src") if img_el else None,
                 "location": loc_el.get_text(" ", strip=True) if loc_el else "",
                 "desc": desc,
-            })
+            }
+            l.update(parse_specs(title, desc))
+            out.append(l)
         if len(items) < 20:
             break
         time.sleep(1.5)
     return out
+
+
+def sauto_extra(it):
+    """Strukturované údaje ze Sauta (pokud je API vrací)."""
+    def cb(key):
+        v = it.get(key)
+        return (v.get("name") or v.get("seo_name") or "").lower() if isinstance(v, dict) else ""
+    extra = {}
+    vol = it.get("engine_volume")
+    if isinstance(vol, (int, float)) and 500 < vol < 7000:
+        extra["disp"] = f"{vol / 1000:.1f}"
+    pw = it.get("engine_power")
+    if isinstance(pw, (int, float)) and 30 <= pw <= 450:
+        extra["kw"] = int(pw)
+    f = cb("fuel_cb")
+    if "naft" in f or "diesel" in f:
+        extra["fuel"] = "nafta"
+    elif "lpg" in f:
+        extra["fuel"] = "LPG"
+    elif "cng" in f:
+        extra["fuel"] = "CNG"
+    elif "benz" in f:
+        extra["fuel"] = "benzín"
+    g = cb("gearbox_cb")
+    if "autom" in g:
+        extra["gearbox"] = "automat"
+    elif "manu" in g:
+        extra["gearbox"] = "manuál"
+    b = cb("vehicle_body_cb")
+    if "kombi" in b:
+        extra["body"] = "kombi"
+    elif b:
+        extra["body"] = "standard"
+    return extra
 
 
 def fetch_sauto(s, pages):
@@ -154,7 +278,8 @@ def fetch_sauto(s, pages):
             if img and img.startswith("//"):
                 img = "https:" + img
             loc = it.get("locality") or {}
-            out.append({
+            extra = sauto_extra(it)
+            l = {
                 "id": f"sauto:{iid}",
                 "source": "Sauto",
                 "title": it.get("name") or f"{man} {mod}",
@@ -165,7 +290,9 @@ def fetch_sauto(s, pages):
                 "image": img,
                 "location": loc.get("municipality") or loc.get("district") or "",
                 "desc": "",
-            })
+            }
+            l.update(parse_specs(l["title"], "", extra))
+            out.append(l)
         if len(results) < 100:
             break
         time.sleep(1.5)
@@ -207,44 +334,72 @@ def passes_filters(l, s, cfg):
         return False
     if l["price"] and s.get("price_min") and l["price"] < s["price_min"]:
         return False
+    if l["price"] and s.get("price_max") and l["price"] > s["price_max"]:
+        return False
+    if s.get("fuel") and l.get("fuel") and l["fuel"].lower() != str(s["fuel"]).lower():
+        return False
+    if s.get("gearbox") and l.get("gearbox") and l["gearbox"].lower() != str(s["gearbox"]).lower():
+        return False
     return True
 
 
 def valuate(l, pool, cfg):
+    """Ocenění podle co nejpodobnějších aut. Začíná přísně (stejný motor, výkon,
+    převodovka, karoserie, verze, rok ±1, km ±40 tis.) a postupně povoluje."""
     v = cfg["valuation"]
     if not l["price"]:
         return None
     others = [p for p in pool if p["id"] != l["id"] and p["price"] and p["price"] >= 5000]
+    min_n = v.get("min_comparables", 5)
 
-    def comparables(yr, kmr):
-        res = []
-        for p in others:
-            if yr is not None and l["year"]:
-                if not p["year"] or abs(p["year"] - l["year"]) > yr:
-                    continue
-            if kmr is not None and l["km"] and p["km"] and abs(p["km"] - l["km"]) > kmr:
-                continue
-            res.append(p["price"])
-        return res
+    def same(p, key):
+        return l.get(key) is None or p.get(key) == l.get(key)
 
-    prices, label = [], ""
-    for yr, kmr, label in [(1, 40000, "rok ±1, km ±40 tis."),
-                           (2, None, "rok ±2"),
-                           (None, None, "celé hledání")]:
-        prices = comparables(yr, kmr)
-        if len(prices) >= v["min_comparables"]:
+    def match(p, engine, kw, year, km, gear_body, fuel):
+        if l["trim"] != p.get("trim"):                       # RS nesrovnávat s běžnou
+            return False
+        if engine and l.get("engine") and p.get("engine") != l["engine"]:
+            return False
+        if kw and l.get("kw") and p.get("kw") and abs(p["kw"] - l["kw"]) > 4:
+            return False
+        if gear_body and not (same(p, "gearbox") and same(p, "body")):
+            return False
+        if fuel and l.get("fuel") and p.get("fuel") and p["fuel"] != l["fuel"]:
+            return False
+        if year and l["year"] and (not p["year"] or abs(p["year"] - l["year"]) > year):
+            return False
+        if km and l["km"] and p["km"] and abs(p["km"] - l["km"]) > km:
+            return False
+        return True
+
+    #        motor  kW    rok km     převod+karos palivo  popis
+    tiers = [(True, True, 1, 40000, True, True, "stejný motor a výkon, rok ±1, km ±40 tis.", True),
+             (True, True, 2, 60000, True, True, "stejný motor a výkon, rok ±2", True),
+             (True, False, 2, None, True, True, "stejný motor, rok ±2", True),
+             (False, False, 2, None, True, True, "stejné palivo, rok ±2", False),
+             (False, False, 2, None, False, False, "jen model a rok ±2 – NEPŘESNÉ", False)]
+    prices, label, precise = [], "", False
+    for eng, kw, yr, km, gb, fu, label, precise in tiers:
+        if eng and not l.get("engine"):
+            continue
+        prices = [p["price"] for p in others if match(p, eng, kw, yr, km, gb, fu)]
+        if len(prices) >= min_n:
             break
     if len(prices) < 3:
         return None
+
     median = statistics.median(prices)
-    sale = median * (1 - v["sale_discount_pct"] / 100)
+    sale = median * (1 - v.get("sale_discount_pct", 5) / 100)
+    buy = l["price"] * (1 - v.get("negotiation_pct", 7) / 100)
     return {
         "median": median,
         "discount": (median - l["price"]) / median * 100,
         "sale": sale,
-        "margin": sale - l["price"] - v["costs"],
+        "buy": buy,
+        "margin": sale - buy - v["costs"],
         "count": len(prices),
         "basis": label,
+        "precise": precise,
     }
 
 
@@ -322,11 +477,15 @@ def build_message(l, s, val, kw, ai, cfg):
         info.append(f"📍 {e(l['location'])}")
     if info:
         lines.append(" · ".join(info))
+    spec = specs_label(l)
+    if spec:
+        lines.append(f"⚙️ {e(spec)}")
     if val:
         lines.append(f"📈 Odhad prodeje: {fmt(val['sale'])} Kč")
-        lines.append(f"💵 Odhad marže: {fmt(val['margin'])} Kč "
-                     f"(po nákladech {fmt(cfg['valuation']['costs'])} Kč)")
-        lines.append(f"📊 Srovnáno s {val['count']} inzeráty ({val['basis']})")
+        lines.append(f"💵 Odhad marže: <b>{fmt(val['margin'])} Kč</b> "
+                     f"(při nákupu za ~{fmt(val['buy'])} Kč po smlouvání, "
+                     f"náklady {fmt(cfg['valuation']['costs'])} Kč)")
+        lines.append(f"📊 Srovnáno s {val['count']} auty ({e(val['basis'])})")
     if kw:
         lines.append("⚠️ Klíčová slova: " + e(", ".join(kw)))
     if ai:
@@ -397,8 +556,12 @@ def run_once(cfg):
             val = valuate(l, pool, cfg)
             t = text_of(l)
             kw = [k for k in cfg.get("keywords", []) if k.lower() in t]
-            cheap = val is not None and val["discount"] >= cfg["notify"]["min_discount_pct"]
-            if not (cheap or (kw and cfg["notify"]["on_keywords"])):
+            n = cfg["notify"]
+            cheap = (val is not None
+                     and val["margin"] >= n.get("min_margin", 10000)
+                     and val["discount"] >= n.get("min_discount_pct", 0)
+                     and (val["precise"] or not n.get("only_precise", False)))
+            if not (cheap or (kw and n.get("on_keywords", True))):
                 continue
             ai = claude_eval(l, val, cfg) if cfg["claude"]["enabled"] else None
             tg_send(cfg, build_message(l, s, val, kw, ai, cfg), l["image"])

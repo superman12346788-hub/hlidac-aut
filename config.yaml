@@ -15,6 +15,10 @@ searches:
     price_max: 120000
     year_min: 2006          # starší auta se ignorují (nepovinné)
     km_max: 300000          # víc najeto se ignoruje (nepovinné)
+    # fuel: "nafta"         # jen nafta / benzín / LPG / CNG (nepovinné)
+    # gearbox: "manuál"     # jen manuál / automat (nepovinné)
+    # psc: "53002"          # PSČ středu oblasti, jen Bazoš (nepovinné)
+    # okruh_km: 50          # okruh kolem PSČ v km, jen Bazoš (nepovinné)
 
   - name: "Fabia"
     bazos_query: "fabia"
@@ -30,13 +34,16 @@ searches:
 
 # Kdy ti má přijít zpráva
 notify:
-  min_discount_pct: 12      # auto je aspoň o 12 % levnější než medián trhu
+  min_margin: 10000         # odhadovaná marže aspoň 10 000 Kč (po smlouvání a nákladech)
+  min_discount_pct: 0       # navíc min. sleva proti trhu v % (0 = nepoužívat)
+  only_precise: false       # true = jen když se našla auta se stejným motorem
   on_keywords: true         # nebo inzerát obsahuje klíčové slovo (spěchá, dědictví...)
   max_per_run: 15           # pojistka proti zahlcení zprávami
 
 # Ocenění
 valuation:
   costs: 15000              # tvoje náklady na auto (přepis, STK, čištění, rezerva) v Kč
+  negotiation_pct: 7        # o kolik % usmlouváš při nákupu
   sale_discount_pct: 5      # o kolik % pod mediánem inzerátů reálně prodáš (smlouvání)
   min_comparables: 5        # minimum podobných aut pro přesnější srovnání
 
