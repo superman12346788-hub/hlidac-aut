@@ -140,6 +140,18 @@ def parse_specs(title, desc, extra=None):
             "gearbox": gearbox, "body": body, "trim": trim}
 
 
+DEALER_WORDS = ["autobazar", "auto bazar", "aaa auto", "aaaauto", "auto esa", "autoesa", "mototechna",
+                "carvago", "s.r.o", "spol. s r.o", "a.s.", "na splátky", "splátky", "financování",
+                "leasing", "úvěr", "uver", "odpočet dph", "odpocet dph", "možnost dph", "výkup aut",
+                "vykup aut", "zápočet", "protiúčet", "prověřeno", "garance původu", "záruka na",
+                "cena při financování", "cena bez dph", "akční cena", "showroom", "prodejní místo"]
+
+
+def looks_like_dealer(text):
+    t = (text or "").lower()
+    return sum(w in t for w in DEALER_WORDS) >= 1
+
+
 def specs_label(l):
     parts = []
     if l.get("engine"):
@@ -207,6 +219,7 @@ def fetch_bazos(s, pages):
                 "desc": desc,
             }
             l.update(parse_specs(title, desc))
+            l["dealer"] = looks_like_dealer(text)
             out.append(l)
         if len(items) < 20:
             break
@@ -292,6 +305,9 @@ def fetch_sauto(s, pages):
                 "desc": "",
             }
             l.update(parse_specs(l["title"], "", extra))
+            user = it.get("user") if isinstance(it.get("user"), dict) else {}
+            l["dealer"] = bool(it.get("premise") or it.get("premise_id") or user.get("premise")
+                               or user.get("is_company") or looks_like_dealer(l["title"]))
             out.append(l)
         if len(results) < 100:
             break
@@ -299,8 +315,45 @@ def fetch_sauto(s, pages):
     return out
 
 
+def bazos_seller_info(l):
+    """Otevře detail inzerátu na Bazoši: celý popis + kolik aut prodejce inzeruje.
+    Vrací {"desc": str|None, "ads": int|None}. None = nepodařilo se zjistit."""
+    from urllib.parse import urljoin
+    info = {"desc": None, "ads": None}
+    try:
+        r = requests.get(l["url"], headers=HEADERS, timeout=25)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        el = soup.select_one(".popisdetail")
+        if el:
+            info["desc"] = el.get_text(" ", strip=True)
+        link = None
+        for a in soup.find_all("a", href=True):
+            h = a["href"]
+            if "hodnoceni" in h or "idphone=" in h or "idmail=" in h:
+                link = urljoin(l["url"], h)
+                break
+        if not link:
+            log("  odkaz na další inzeráty prodejce nenalezen")
+            return info
+        time.sleep(1)
+        r = requests.get(link, headers=HEADERS, timeout=25)
+        r.raise_for_status()
+        own = l["id"].split(":", 1)[1]
+        ids = set(re.findall(r"auto\.bazos\.cz/inzerat/(\d+)/", r.text))
+        if not ids:  # odkazy bez domény
+            ids = set(re.findall(r"/inzerat/(\d+)/", r.text))
+        ids.add(own)
+        info["ads"] = len(ids)
+    except Exception as e:  # noqa: BLE001
+        log(f"  kontrola prodejce selhala: {e}")
+    return info
+
+
 def fetch_description(l):
     """Celý popis z detailu inzerátu (jen pro Claude zhodnocení)."""
+    if l.get("desc_full"):
+        return l["desc_full"]
     try:
         if l["source"] == "Bazoš":
             r = requests.get(l["url"], headers=HEADERS, timeout=25)
@@ -326,6 +379,8 @@ def text_of(l):
 
 def passes_filters(l, s, cfg):
     t = text_of(l)
+    if cfg.get("only_private", True) and l.get("dealer"):
+        return False
     if any(w.lower() in t for w in cfg.get("exclude", [])):
         return False
     if s.get("year_min") and l["year"] and l["year"] < s["year_min"]:
@@ -349,7 +404,8 @@ def valuate(l, pool, cfg):
     v = cfg["valuation"]
     if not l["price"]:
         return None
-    others = [p for p in pool if p["id"] != l["id"] and p["price"] and p["price"] >= 5000]
+    everyone = [p for p in pool if p["id"] != l["id"] and p["price"] and p["price"] >= 5000]
+    private = [p for p in everyone if not p.get("dealer")]
     min_n = v.get("min_comparables", 5)
 
     def same(p, key):
@@ -378,13 +434,22 @@ def valuate(l, pool, cfg):
              (True, False, 2, None, True, True, "stejný motor, rok ±2", True),
              (False, False, 2, None, True, True, "stejné palivo, rok ±2", False),
              (False, False, 2, None, False, False, "jen model a rok ±2 – NEPŘESNÉ", False)]
-    prices, label, precise = [], "", False
-    for eng, kw, yr, km, gb, fu, label, precise in tiers:
-        if eng and not l.get("engine"):
-            continue
-        prices = [p["price"] for p in others if match(p, eng, kw, yr, km, gb, fu)]
-        if len(prices) >= min_n:
-            break
+    def search(others):
+        prices, label, precise = [], "", False
+        for eng, kw, yr, km, gb, fu, label, precise in tiers:
+            if eng and not l.get("engine"):
+                continue
+            prices = [p["price"] for p in others if match(p, eng, kw, yr, km, gb, fu)]
+            if len(prices) >= min_n:
+                break
+        return prices, label, precise
+
+    # nejdřív jen soukromníci (bazary mají ceny nahoře), když jich je málo, tak všichni
+    prices, label, precise = search(private)
+    if len(prices) < min_n:
+        prices, label, precise = search(everyone)
+        if prices:
+            label += ", vč. bazarů"
     if len(prices) < 3:
         return None
 
@@ -486,12 +551,29 @@ def build_message(l, s, val, kw, ai, cfg):
                      f"(při nákupu za ~{fmt(val['buy'])} Kč po smlouvání, "
                      f"náklady {fmt(cfg['valuation']['costs'])} Kč)")
         lines.append(f"📊 Srovnáno s {val['count']} auty ({e(val['basis'])})")
+    if l["source"] == "Bazoš" and "seller_ads" in l:
+        if l["seller_ads"] is None:
+            lines.append("👤 Počet inzerátů prodejce se nepodařilo zjistit")
+        else:
+            lines.append(f"👤 Prodejce má na Bazoši {l['seller_ads']} inzerát(ů) aut")
     if kw:
         lines.append("⚠️ Klíčová slova: " + e(", ".join(kw)))
     if ai:
         lines.append(f"\n🤖 {e(ai)}")
     lines.append(f'\n🔗 <a href="{e(l["url"])}">Otevřít na {l["source"]}</a>')
     return "\n".join(lines)
+
+
+def fingerprints(l, search_name):
+    """Otisky inzerátu nezávislé na ID – stejné auto vložené znovu
+    nebo na Bazoši i Sautu se pozná podle ceny, roku, km a názvu."""
+    fps = []
+    title = re.sub(r"[^a-z0-9]", "", (l["title"] or "").lower())
+    if title and l["price"]:
+        fps.append(f"fp:{search_name}:{title}:{l['price']}")
+    if l["price"] and l["year"] and l["km"]:
+        fps.append(f"fp:{search_name}:{l['price']}:{l['year']}:{l['km'] // 1000}")
+    return fps
 
 
 # ---------------------------------------------------------------- stav
@@ -534,12 +616,21 @@ def run_once(cfg):
                 pool += fetch_sauto(s, cfg["pages"]["sauto"])
             except Exception as e:  # noqa: BLE001
                 log(f"[{s['name']}] Sauto chyba: {e}")
+        uniq = {}
+        for l in pool:                      # TOP inzeráty bývají na více stránkách
+            uniq.setdefault(l["id"], l)
+        pool = list(uniq.values())
         log(f"[{s['name']}] staženo {len(pool)} inzerátů")
 
         first = s["name"] not in seen["searches"]
-        new = [l for l in pool if l["id"] not in seen["items"]]
+        new = []
         for l in pool:
+            fps = fingerprints(l, s["name"])
+            if l["id"] not in seen["items"] and not any(f in seen["items"] for f in fps):
+                new.append(l)
             seen["items"][l["id"]] = now
+            for f in fps:
+                seen["items"][f] = now
         if first:
             seen["searches"].append(s["name"])
             if pool:
@@ -563,6 +654,18 @@ def run_once(cfg):
                      and (val["precise"] or not n.get("only_precise", False)))
             if not (cheap or (kw and n.get("on_keywords", True))):
                 continue
+            if l["source"] == "Bazoš" and cfg.get("only_private", True):
+                si = bazos_seller_info(l)
+                if si["desc"]:
+                    l["desc_full"] = si["desc"]
+                    if looks_like_dealer(si["desc"]):
+                        log(f"  přeskočeno (bazar podle popisu): {l['title']}")
+                        continue
+                l["seller_ads"] = si["ads"]
+                limit = cfg.get("max_seller_ads", 3)
+                if si["ads"] is not None and si["ads"] > limit:
+                    log(f"  přeskočeno (prodejce má {si['ads']} aut): {l['title']}")
+                    continue
             ai = claude_eval(l, val, cfg) if cfg["claude"]["enabled"] else None
             tg_send(cfg, build_message(l, s, val, kw, ai, cfg), l["image"])
             log(f"  -> posláno: {l['title']} ({l['price']} Kč)")
@@ -571,6 +674,17 @@ def run_once(cfg):
 
     save_seen(seen)
     log(f"Hotovo, odesláno {sent} upozornění.")
+
+
+def within_hours(cfg):
+    """Je teď v Česku čas, kdy se smí posílat upozornění?"""
+    hours = cfg.get("notify_hours")
+    if not hours:
+        return True
+    from zoneinfo import ZoneInfo
+    h = datetime.now(ZoneInfo("Europe/Prague")).hour
+    start, end = int(hours[0]), int(hours[1])
+    return start <= h < end
 
 
 def main():
@@ -586,10 +700,16 @@ def main():
     if args.loop:
         while True:
             try:
-                run_once(cfg)
+                if within_hours(cfg):
+                    run_once(cfg)
+                else:
+                    log("Mimo povolené hodiny, čekám.")
             except Exception as e:  # noqa: BLE001
                 log(f"Chyba běhu: {e}")
             time.sleep(args.loop * 60)
+    if not within_hours(cfg):
+        log("Mimo povolené hodiny – nic nestahuji, noční inzeráty pošlu ráno.")
+        return
     run_once(cfg)
 
 
