@@ -7,34 +7,194 @@
 # sauto_model  = značka:model z adresy na Sauto
 #                (sauto.cz/inzerce/osobni/skoda/octavia -> "skoda:octavia")
 #                když Sauto hlídat nechceš, smaž řádek
-searches:
-  - name: "Octavia"
-    bazos_query: "octavia"
-    sauto_model: "skoda:octavia"
-    price_min: 20000
-    price_max: 120000
-    year_min: 2006          # starší auta se ignorují (nepovinné)
-    km_max: 300000          # víc najeto se ignoruje (nepovinné)
-    # fuel: "nafta"         # jen nafta / benzín / LPG / CNG (nepovinné)
-    # gearbox: "manuál"     # jen manuál / automat (nepovinné)
-    # psc: "53002"          # PSČ středu oblasti, jen Bazoš (nepovinné)
-    # okruh_km: 50          # okruh kolem PSČ v km, jen Bazoš (nepovinné)
+# Odkud jezdíš: Bazoš hledá jen v okruhu kolem PSČ, u Sauta bot počítá vzdálenost.
+# 130 km vzdušnou čarou ≈ 2 hodiny autem (cca 170 km po silnici).
+home:
+  name: "Třebechovice pod Orebem"
+  psc: "50346"
+  lat: 50.2010
+  lon: 15.9920
+  radius_km: 130
+  # když Sauto u inzerátu nepošle souřadnice, rozhodne kraj:
+  regions: ["Královéhradecký", "Pardubický", "Liberecký", "Středočeský", "Praha", "Vysočina", "Olomoucký"]
 
+searches:
+  # ---- Škoda, VW, Audi (smaž blok, který nechceš hlídat) ----
   - name: "Fabia"
     bazos_query: "fabia"
     sauto_model: "skoda:fabia"
-    price_min: 15000
-    price_max: 80000
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Rapid"
+    bazos_query: "skoda rapid"
+    sauto_model: "skoda:rapid"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Octavia"
+    bazos_query: "octavia"
+    sauto_model: "skoda:octavia"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Superb"
+    bazos_query: "superb"
+    sauto_model: "skoda:superb"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Karoq"
+    bazos_query: "karoq"
+    sauto_model: "skoda:karoq"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Kodiaq"
+    bazos_query: "kodiaq"
+    sauto_model: "skoda:kodiaq"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Polo"
+    bazos_query: "polo"
+    sauto_model: "volkswagen:polo"
+    price_min: 30000
+    price_max: 200000
 
   - name: "Golf"
     bazos_query: "golf"
     sauto_model: "volkswagen:golf"
-    price_min: 20000
-    price_max: 120000
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Passat"
+    bazos_query: "passat"
+    sauto_model: "volkswagen:passat"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Touran"
+    bazos_query: "touran"
+    sauto_model: "volkswagen:touran"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Sharan"
+    bazos_query: "sharan"
+    sauto_model: "volkswagen:sharan"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Tiguan"
+    bazos_query: "tiguan"
+    sauto_model: "volkswagen:tiguan"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Touareg"
+    bazos_query: "touareg"
+    sauto_model: "volkswagen:touareg"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Caddy"
+    bazos_query: "caddy"
+    sauto_model: "volkswagen:caddy"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Audi A3"
+    bazos_query: "audi a3"
+    sauto_model: "audi:a3"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Audi A4"
+    bazos_query: "audi a4"
+    sauto_model: "audi:a4"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Audi A5"
+    bazos_query: "audi a5"
+    sauto_model: "audi:a5"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Audi A6"
+    bazos_query: "audi a6"
+    sauto_model: "audi:a6"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Audi Q3"
+    bazos_query: "audi q3"
+    sauto_model: "audi:q3"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Audi Q5"
+    bazos_query: "audi q5"
+    sauto_model: "audi:q5"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Audi Q7"
+    bazos_query: "audi q7"
+    sauto_model: "audi:q7"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "Audi TT"
+    bazos_query: "audi tt"
+    sauto_model: "audi:tt"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "VW Transporter"
+    bazos_query: "transporter"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "VW Multivan"
+    bazos_query: "multivan"
+    price_min: 30000
+    price_max: 200000
+
+  - name: "VW Caravelle"
+    bazos_query: "caravelle"
+    price_min: 30000
+    price_max: 200000
+
+# ------------------------------------------------------------
+#  LOVEC ZÁVAD – hledá u Škody, VW a Audi auta s vadou
+#  a spočítá, kolik ti zbude na opravu, když chceš vydělat
+#  target_profit. Tržní cenu bere z pojízdných aut na Sautu.
+# ------------------------------------------------------------
+lovec:
+  enabled: true
+  queries:                  # každé slovo = jedno hledání na Bazoši
+    - "nepojízdné"
+    - "na opravu"
+    - "kontrolka"
+    - "závada motoru"
+    - "na náhradní díly"
+    - "bez STK"
+  price_min: 30000
+  price_max: 200000
+  year_min: 2005
+  pages: 2                  # stránky výsledků na jedno slovo (20 inzerátů/str.)
+  target_profit: 20000      # kolik chceš na autě vydělat
+  min_repair_room: 15000    # pošli, jen když na opravu zbude aspoň tolik
+
+# Denní souhrn: poslední běh po této hodině (český čas) pošle přehled dne.
+# null = vypnuto
+summary_hour: 21
 
 # true = jen soukromí prodejci, autobazary (AAA Auto apod.) se přeskakují
 only_private: true
-max_seller_ads: 3           # Bazoš: přeskočit prodejce, který má víc aut než tohle
+max_seller_ads: 4           # Bazoš: přeskočit prodejce, který má víc aut než tohle
 
 # Upozornění jen v tyto hodiny (český čas), od–do. V noci bot nic nestahuje,
 # nové inzeráty z noci pošle při prvním ranním běhu.
@@ -42,7 +202,7 @@ notify_hours: [7, 22]
 
 # Kdy ti má přijít zpráva
 notify:
-  min_margin: 10000         # odhadovaná marže aspoň 10 000 Kč (po smlouvání a nákladech)
+  min_margin: 5000          # odhadovaná marže aspoň 5 000 Kč (po smlouvání a nákladech)
   min_discount_pct: 0       # navíc min. sleva proti trhu v % (0 = nepoužívat)
   only_precise: false       # true = jen když se našla auta se stejným motorem
   on_keywords: true         # nebo inzerát obsahuje klíčové slovo (spěchá, dědictví...)
@@ -50,9 +210,10 @@ notify:
 
 # Ocenění
 valuation:
-  costs: 15000              # tvoje náklady na auto (přepis, STK, čištění, rezerva) v Kč
-  negotiation_pct: 7        # o kolik % usmlouváš při nákupu
-  sale_discount_pct: 5      # o kolik % pod mediánem inzerátů reálně prodáš (smlouvání)
+  costs: 15000              # náklady u auta s vadou (odtah, STK, čištění, rezerva) v Kč
+  costs_functional: 0       # náklady u funkčního auta (0 = nepočítat)
+  negotiation_pct: 0        # o kolik % usmlouváš při nákupu (0 = počítá s cenou z inzerátu)
+  sale_discount_pct: 0      # o kolik % pod mediánem prodáš (0 = prodej za medián trhu)
   min_comparables: 5        # minimum podobných aut pro přesnější srovnání
 
 # Slova, která často znamenají výhodnou koupi
@@ -79,8 +240,8 @@ exclude:
 
 # Kolik stránek výsledků procházet (Bazoš 20/str., Sauto 100/str.)
 pages:
-  bazos: 5
-  sauto: 2
+  bazos: 2
+  sauto: 1
 
 # Slovní zhodnocení od Claude (stojí pár haléřů za inzerát)
 # Zapneš: enabled: true + nastavíš ANTHROPIC_API_KEY (viz NAVOD.md)

@@ -24,6 +24,7 @@ from bs4 import BeautifulSoup
 BASE = Path(__file__).resolve().parent
 CONFIG_FILE = BASE / "config.yaml"
 SEEN_FILE = BASE / "seen.json"
+HOME = {}  # doplní se z config.yaml (home)
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                   "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
@@ -168,14 +169,62 @@ def specs_label(l):
     return " · ".join(parts)
 
 
+# Rozpoznání modelu z názvu inzerátu -> Sauto (značka:model) pro tržní cenu
+MODELS = [
+    ("skoda rapid", "skoda:rapid", "Škoda Rapid"),
+    ("octavia", "skoda:octavia", "Škoda Octavia"),
+    ("touareg", "volkswagen:touareg", "VW Touareg"),
+    ("audi a3", "audi:a3", "Audi A3"),
+    ("audi a4", "audi:a4", "Audi A4"),
+    ("audi a5", "audi:a5", "Audi A5"),
+    ("audi a6", "audi:a6", "Audi A6"),
+    ("audi q3", "audi:q3", "Audi Q3"),
+    ("audi q5", "audi:q5", "Audi Q5"),
+    ("audi q7", "audi:q7", "Audi Q7"),
+    ("audi tt", "audi:tt", "Audi TT"),
+    ("superb", "skoda:superb", "Škoda Superb"),
+    ("kodiaq", "skoda:kodiaq", "Škoda Kodiaq"),
+    ("passat", "volkswagen:passat", "VW Passat"),
+    ("touran", "volkswagen:touran", "VW Touran"),
+    ("sharan", "volkswagen:sharan", "VW Sharan"),
+    ("tiguan", "volkswagen:tiguan", "VW Tiguan"),
+    ("fabia", "skoda:fabia", "Škoda Fabia"),
+    ("karoq", "skoda:karoq", "Škoda Karoq"),
+    ("caddy", "volkswagen:caddy", "VW Caddy"),
+    ("polo", "volkswagen:polo", "VW Polo"),
+    ("golf", "volkswagen:golf", "VW Golf"),
+]
+PART_START = ["motor", "převodovk", "prevodovk", "dveře", "dvere", "světl", "svetl", "nárazník",
+              "naraznik", "kola", "pneu", "disky", "alu kola", "sedačk", "kapota", "blatník",
+              "hlava", "turbo", "vstřik", "vstrik", "airbag", "rozprodám", "rozprodam",
+              "díly", "dily", "náhradní díly", "nahradni dily", "zrcátk", "volant", "řídicí", "jednotka"]
+
+
+def detect_model(title):
+    t = (title or "").lower()
+    for key, seo, label in MODELS:
+        if has_token(t, key):
+            return seo, label
+    for key, seo, label in MODELS:          # bez značky: "A4 Avant", "Rapid 1.2"
+        short = key.split()[-1]
+        if len(short) >= 2 and short not in ("up", "tt") and has_token(t, short):
+            return seo, label
+    return None, None
+
+
+def looks_like_part(title):
+    t = (title or "").lower().strip()
+    return any(t.startswith(p) for p in PART_START)
+
+
 # ---------------------------------------------------------------- zdroje
 
 def fetch_bazos(s, pages):
     params = {
         "hledat": s["bazos_query"],
         "rubriky": "auto",
-        "hlokalita": s.get("psc", ""),
-        "humkreis": s.get("okruh_km", ""),
+        "hlokalita": s.get("psc", "") or HOME.get("psc", ""),
+        "humkreis": s.get("okruh_km", "") or HOME.get("radius_km", ""),
         "cenaod": s.get("price_min", ""),
         "cenado": s.get("price_max", ""),
         "Submit": "Hledat",
@@ -223,7 +272,7 @@ def fetch_bazos(s, pages):
             out.append(l)
         if len(items) < 20:
             break
-        time.sleep(1.5)
+        time.sleep(1)
     return out
 
 
@@ -259,6 +308,45 @@ def sauto_extra(it):
     elif b:
         extra["body"] = "standard"
     return extra
+
+
+def sauto_gps(loc):
+    """Souřadnice z lokality Sauta (API je vrací pod různými klíči)."""
+    for a, b in (("gps_lat", "gps_lon"), ("latitude", "longitude"), ("lat", "lon"), ("lat", "lng")):
+        try:
+            if loc.get(a) is not None and loc.get(b) is not None:
+                return float(loc[a]), float(loc[b])
+        except (TypeError, ValueError):
+            pass
+    g = loc.get("gps") or loc.get("coordinates")
+    if isinstance(g, dict):
+        try:
+            return float(g.get("lat")), float(g.get("lon") or g.get("lng"))
+        except (TypeError, ValueError):
+            pass
+    return None, None
+
+
+def distance_km(lat1, lon1, lat2, lon2):
+    from math import radians, sin, cos, asin, sqrt
+    dlat, dlon = radians(lat2 - lat1), radians(lon2 - lon1)
+    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) ** 2
+    return 6371 * 2 * asin(sqrt(a))
+
+
+def too_far(l, cfg):
+    """True = inzerát je dál, než chceš jet. Bazoš filtruje už při hledání."""
+    home = cfg.get("home") or {}
+    if not home.get("radius_km") or l["source"] != "Sauto":
+        return False
+    if l.get("lat") is not None and home.get("lat"):
+        d = distance_km(home["lat"], home["lon"], l["lat"], l["lon"])
+        l["distance"] = round(d)
+        return d > home["radius_km"]
+    regions = [r.lower() for r in home.get("regions", [])]
+    if regions and l.get("region"):
+        return not any(r in l["region"].lower() for r in regions)
+    return False
 
 
 def fetch_sauto(s, pages):
@@ -304,6 +392,8 @@ def fetch_sauto(s, pages):
                 "location": loc.get("municipality") or loc.get("district") or "",
                 "desc": "",
             }
+            l["lat"], l["lon"] = sauto_gps(loc)
+            l["region"] = str(loc.get("region") or loc.get("region_name") or "")
             l.update(parse_specs(l["title"], "", extra))
             user = it.get("user") if isinstance(it.get("user"), dict) else {}
             l["dealer"] = bool(it.get("premise") or it.get("premise_id") or user.get("premise")
@@ -311,7 +401,7 @@ def fetch_sauto(s, pages):
             out.append(l)
         if len(results) < 100:
             break
-        time.sleep(1.5)
+        time.sleep(1)
     return out
 
 
@@ -378,6 +468,8 @@ def text_of(l):
 
 
 def passes_filters(l, s, cfg):
+    if too_far(l, cfg):
+        return False
     t = text_of(l)
     if cfg.get("only_private", True) and l.get("dealer"):
         return False
@@ -396,6 +488,22 @@ def passes_filters(l, s, cfg):
     if s.get("gearbox") and l.get("gearbox") and l["gearbox"].lower() != str(s["gearbox"]).lower():
         return False
     return True
+
+
+DEFECT_WORDS = ["nepojízd", "nepojizd", "na opravu", "závad", "zavad", "kontrolk", "bez stk",
+                "na díly", "na dily", "na nd", "náhradní díly", "nahradni dily", "havar", "nestartuje",
+                "neřadí", "neradi", "klepe", "kouří", "kouri", "netěsn", "prasklý", "nejede"]
+
+
+def is_defective(l):
+    t = f"{l.get('title', '')} {l.get('desc', '')} {l.get('desc_full', '')}".lower()
+    return any(w in t for w in DEFECT_WORDS)
+
+
+def car_costs(l, cfg):
+    """Náklady: u funkčního auta costs_functional (výchozí 0), u auta s vadou costs."""
+    v = cfg["valuation"]
+    return v.get("costs", 15000) if is_defective(l) else v.get("costs_functional", 0)
 
 
 def valuate(l, pool, cfg):
@@ -454,14 +562,15 @@ def valuate(l, pool, cfg):
         return None
 
     median = statistics.median(prices)
-    sale = median * (1 - v.get("sale_discount_pct", 5) / 100)
-    buy = l["price"] * (1 - v.get("negotiation_pct", 7) / 100)
+    sale = median * (1 - v.get("sale_discount_pct", 0) / 100)
+    buy = l["price"] * (1 - v.get("negotiation_pct", 0) / 100)
     return {
         "median": median,
         "discount": (median - l["price"]) / median * 100,
         "sale": sale,
         "buy": buy,
-        "margin": sale - buy - v["costs"],
+        "margin": sale - buy - car_costs(l, cfg),
+        "costs": car_costs(l, cfg),
         "count": len(prices),
         "basis": label,
         "precise": precise,
@@ -539,7 +648,8 @@ def build_message(l, s, val, kw, ai, cfg):
     if l["km"]:
         info.append(f"🛣 {fmt(l['km'])} km")
     if l["location"]:
-        info.append(f"📍 {e(l['location'])}")
+        dist = f" (~{l['distance']} km)" if l.get("distance") is not None else ""
+        info.append(f"📍 {e(l['location'])}{dist}")
     if info:
         lines.append(" · ".join(info))
     spec = specs_label(l)
@@ -547,9 +657,10 @@ def build_message(l, s, val, kw, ai, cfg):
         lines.append(f"⚙️ {e(spec)}")
     if val:
         lines.append(f"📈 Odhad prodeje: {fmt(val['sale'])} Kč")
+        haggle = "po smlouvání" if cfg["valuation"].get("negotiation_pct", 0) else "za cenu z inzerátu"
         lines.append(f"💵 Odhad marže: <b>{fmt(val['margin'])} Kč</b> "
-                     f"(při nákupu za ~{fmt(val['buy'])} Kč po smlouvání, "
-                     f"náklady {fmt(cfg['valuation']['costs'])} Kč)")
+                     f"(při nákupu {haggle} {fmt(val['buy'])} Kč, "
+                     + (f"náklady {fmt(val['costs'])} Kč)" if val.get("costs") else "bez nákladů, funkční auto)"))
         lines.append(f"📊 Srovnáno s {val['count']} auty ({e(val['basis'])})")
     if l["source"] == "Bazoš" and "seller_ads" in l:
         if l["seller_ads"] is None:
@@ -598,12 +709,76 @@ def save_seen(seen):
 
 # ---------------------------------------------------------------- hlavní běh
 
-def run_once(cfg):
-    seen = load_seen()
-    now = datetime.now().isoformat()
-    sent = 0
-    max_sent = cfg["notify"]["max_per_run"]
+def prague_now():
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("Europe/Prague"))
 
+
+def stats_for_today(seen):
+    today = prague_now().date().isoformat()
+    st = seen.get("stats")
+    if not st or st.get("date") != today:
+        st = {"date": today, "downloaded": 0, "new": 0, "sent": 0, "reasons": {}, "top": [],
+              "errors": []}
+        seen["stats"] = st
+    return st
+
+
+def count(st, reason):
+    st["reasons"][reason] = st["reasons"].get(reason, 0) + 1
+
+
+def remember_top(st, l, val, label):
+    if not val:
+        return
+    st["top"].append({"title": l["title"][:70], "price": l["price"], "margin": int(val["margin"]),
+                      "url": l["url"], "label": label})
+    st["top"] = sorted(st["top"], key=lambda x: -x["margin"])[:5]
+
+
+def check_seller(l, cfg, st):
+    """Bazoš: celý popis + počet inzerátů prodejce. True = v pořádku."""
+    if l["source"] != "Bazoš" or not cfg.get("only_private", True):
+        return True
+    si = bazos_seller_info(l)
+    if si["desc"]:
+        l["desc_full"] = si["desc"]
+        if looks_like_dealer(si["desc"]):
+            log(f"  přeskočeno (bazar podle popisu): {l['title']}")
+            count(st, "bazar")
+            return False
+    l["seller_ads"] = si["ads"]
+    if si["ads"] is not None and si["ads"] > cfg.get("max_seller_ads", 4):
+        log(f"  přeskočeno (prodejce má {si['ads']} aut): {l['title']}")
+        count(st, "překupník")
+        return False
+    return True
+
+
+def mark_new(pool, name, seen, now):
+    new = []
+    for l in pool:
+        fps = fingerprints(l, name)
+        if l["id"] not in seen["items"] and not any(f in seen["items"] for f in fps):
+            new.append(l)
+        seen["items"][l["id"]] = now
+        for f in fps:
+            seen["items"][f] = now
+    return new
+
+
+def first_run(name, pool, seen, cfg):
+    if name in seen["searches"]:
+        return False
+    seen["searches"].append(name)
+    if pool:
+        tg_send(cfg, f"✅ Začínám hlídat <b>{html.escape(name)}</b> – na trhu je teď "
+                     f"{len(pool)} inzerátů. Posílat budu jen nové.")
+    return True
+
+
+def run_models(cfg, seen, now, st, budget):
+    sent = 0
     for s in cfg["searches"]:
         pool = []
         if s.get("bazos_query"):
@@ -611,67 +786,163 @@ def run_once(cfg):
                 pool += fetch_bazos(s, cfg["pages"]["bazos"])
             except Exception as e:  # noqa: BLE001
                 log(f"[{s['name']}] Bazoš chyba: {e}")
+                st["errors"].append(f"{s['name']} Bazoš")
         if s.get("sauto_model"):
             try:
                 pool += fetch_sauto(s, cfg["pages"]["sauto"])
             except Exception as e:  # noqa: BLE001
                 log(f"[{s['name']}] Sauto chyba: {e}")
-        uniq = {}
-        for l in pool:                      # TOP inzeráty bývají na více stránkách
-            uniq.setdefault(l["id"], l)
-        pool = list(uniq.values())
+                st["errors"].append(f"{s['name']} Sauto")
+        pool = list({l["id"]: l for l in pool}.values())
         log(f"[{s['name']}] staženo {len(pool)} inzerátů")
+        st["downloaded"] += len(pool)
 
-        first = s["name"] not in seen["searches"]
-        new = []
-        for l in pool:
-            fps = fingerprints(l, s["name"])
-            if l["id"] not in seen["items"] and not any(f in seen["items"] for f in fps):
-                new.append(l)
-            seen["items"][l["id"]] = now
-            for f in fps:
-                seen["items"][f] = now
-        if first:
-            seen["searches"].append(s["name"])
-            if pool:
-                tg_send(cfg, f"✅ Začínám hlídat <b>{html.escape(s['name'])}</b> "
-                             f"– na trhu je teď {len(pool)} inzerátů. "
-                             f"Posílat budu jen nové.")
+        new = mark_new(pool, s["name"], seen, now)
+        if first_run(s["name"], pool, seen, cfg):
             continue
+        st["new"] += len(new)
 
         for l in new:
-            if sent >= max_sent:
-                break
             if not passes_filters(l, s, cfg):
+                count(st, "daleko" if l.get("distance") or too_far(l, cfg) else "filtr (cena/rok/km/palivo)")
                 continue
             val = valuate(l, pool, cfg)
-            t = text_of(l)
-            kw = [k for k in cfg.get("keywords", []) if k.lower() in t]
+            kw = [k for k in cfg.get("keywords", []) if k.lower() in text_of(l)]
             n = cfg["notify"]
+            remember_top(st, l, val, s["name"])
             cheap = (val is not None
-                     and val["margin"] >= n.get("min_margin", 10000)
+                     and val["margin"] >= n.get("min_margin", 5000)
                      and val["discount"] >= n.get("min_discount_pct", 0)
                      and (val["precise"] or not n.get("only_precise", False)))
             if not (cheap or (kw and n.get("on_keywords", True))):
+                count(st, "malá marže" if val else "nejde ocenit")
                 continue
-            if l["source"] == "Bazoš" and cfg.get("only_private", True):
-                si = bazos_seller_info(l)
-                if si["desc"]:
-                    l["desc_full"] = si["desc"]
-                    if looks_like_dealer(si["desc"]):
-                        log(f"  přeskočeno (bazar podle popisu): {l['title']}")
-                        continue
-                l["seller_ads"] = si["ads"]
-                limit = cfg.get("max_seller_ads", 3)
-                if si["ads"] is not None and si["ads"] > limit:
-                    log(f"  přeskočeno (prodejce má {si['ads']} aut): {l['title']}")
-                    continue
+            if sent >= budget:
+                count(st, "limit zpráv")
+                continue
+            if not check_seller(l, cfg, st):
+                continue
             ai = claude_eval(l, val, cfg) if cfg["claude"]["enabled"] else None
             tg_send(cfg, build_message(l, s, val, kw, ai, cfg), l["image"])
             log(f"  -> posláno: {l['title']} ({l['price']} Kč)")
             sent += 1
             time.sleep(1)
+    return sent
 
+
+def run_hunter(cfg, seen, now, st, budget):
+    """Lovec závad: nepojízdná / auta s vadou u všech podporovaných modelů."""
+    h = cfg.get("lovec") or {}
+    if not h.get("enabled"):
+        return 0
+    name = "Lovec závad"
+    pool = {}
+    for q in h.get("queries", []):
+        s = {"name": name, "bazos_query": q, "price_min": h.get("price_min", 5000),
+             "price_max": h.get("price_max", 90000)}
+        try:
+            for l in fetch_bazos(s, h.get("pages", 2)):
+                pool.setdefault(l["id"], l)
+        except Exception as e:  # noqa: BLE001
+            log(f"[{name}] Bazoš chyba ({q}): {e}")
+            st["errors"].append(f"Lovec {q}")
+        time.sleep(1)
+    pool = list(pool.values())
+    log(f"[{name}] staženo {len(pool)} inzerátů")
+    st["downloaded"] += len(pool)
+    new = mark_new(pool, name, seen, now)
+    if first_run(name, pool, seen, cfg):
+        return 0
+    st["new"] += len(new)
+
+    market, sent = {}, 0
+    for l in new:
+        if looks_like_part(l["title"]) or any(w in text_of(l) for w in cfg.get("exclude", [])):
+            count(st, "lovec: díl / nechtěné")
+            continue
+        if too_far(l, cfg):
+            count(st, "daleko")
+            continue
+        if not l["price"] or l["price"] < h.get("price_min", 5000):
+            count(st, "lovec: bez ceny")
+            continue
+        if h.get("year_min") and l["year"] and l["year"] < h["year_min"]:
+            count(st, "filtr (cena/rok/km/palivo)")
+            continue
+        seo, label = detect_model(l["title"])
+        if not seo:
+            count(st, "lovec: neznámý model")
+            continue
+        if seo not in market:
+            try:
+                market[seo] = [p for p in fetch_sauto({"sauto_model": seo}, 2)
+                               if not any(k in p["title"].lower() for k in ("nepojízd", "havar", "na opravu", "na díly"))]
+            except Exception as e:  # noqa: BLE001
+                log(f"  tržní cena {label} nešla stáhnout: {e}")
+                market[seo] = []
+        val = valuate(l, market[seo], cfg)
+        if not val:
+            count(st, "lovec: málo srovnání")
+            continue
+        room = val["margin"] - h.get("target_profit", 20000)
+        val["repair_room"] = room
+        remember_top(st, l, val, f"Lovec · {label}")
+        if room < h.get("min_repair_room", 15000):
+            count(st, "lovec: málo prostoru na opravu")
+            continue
+        if sent >= budget:
+            count(st, "limit zpráv")
+            continue
+        if not check_seller(l, cfg, st):
+            continue
+        kw = [k for k in cfg.get("keywords", []) if k.lower() in text_of(l)]
+        ai = claude_eval(l, val, cfg) if cfg["claude"]["enabled"] else None
+        s = {"name": f"Lovec závad · {label}"}
+        msg = build_message(l, s, val, kw, ai, cfg).replace(
+            "📈 Odhad prodeje", "📈 Prodej po opravě", 1)
+        extra = (f"🔧 <b>Na opravu zbývá až {fmt(room)} Kč</b> "
+                 f"(při zisku {fmt(h.get('target_profit', 20000))} Kč)")
+        msg = msg.replace("\n📊", f"\n{extra}\n📊", 1)
+        tg_send(cfg, msg, l["image"])
+        log(f"  -> lovec posláno: {l['title']} ({l['price']} Kč)")
+        sent += 1
+        time.sleep(1)
+    return sent
+
+
+def maybe_summary(cfg, seen, st):
+    hour = cfg.get("summary_hour", 21)
+    if hour is None or prague_now().hour < int(hour) or seen.get("summary_sent") == st["date"]:
+        return
+    lines = [f"📋 <b>Denní souhrn {st['date']}</b>",
+             f"Prošlo {st['downloaded']} inzerátů (souhrnně za běhy), nových {st['new']}, "
+             f"posláno {st['sent']}."]
+    if st["reasons"]:
+        lines.append("\nProč nové inzeráty nepřišly:")
+        for r, c in sorted(st["reasons"].items(), key=lambda x: -x[1]):
+            lines.append(f"• {html.escape(r)}: {c}")
+    if st["top"]:
+        lines.append("\nNejlepší kusy dne podle odhadu marže:")
+        for t in st["top"][:3]:
+            lines.append(f'• <a href="{html.escape(t["url"])}">{html.escape(t["title"])}</a> – '
+                         f'{fmt(t["price"] or 0)} Kč, marže ~{fmt(t["margin"])} Kč '
+                         f'({html.escape(t["label"])})')
+    if st["errors"]:
+        errs = sorted(set(st["errors"]))
+        lines.append("\n⚠️ Chyby zdrojů: " + html.escape(", ".join(errs[:8])))
+    tg_send(cfg, "\n".join(lines))
+    seen["summary_sent"] = st["date"]
+
+
+def run_once(cfg):
+    seen = load_seen()
+    now = datetime.now().isoformat()
+    st = stats_for_today(seen)
+    budget = cfg["notify"]["max_per_run"]
+    sent = run_models(cfg, seen, now, st, budget)
+    sent += run_hunter(cfg, seen, now, st, budget - sent)
+    st["sent"] += sent
+    maybe_summary(cfg, seen, st)
     save_seen(seen)
     log(f"Hotovo, odesláno {sent} upozornění.")
 
@@ -693,6 +964,7 @@ def main():
     ap.add_argument("--test", action="store_true", help="poslat zkušební zprávu")
     args = ap.parse_args()
     cfg = yaml.safe_load(CONFIG_FILE.read_text(encoding="utf-8"))
+    HOME.update(cfg.get("home") or {})
 
     if args.test:
         tg_send(cfg, "👋 Bot funguje! Zprávy o nových autech budou chodit sem.")
