@@ -26,11 +26,6 @@ searches:
     price_min: 30000
     price_max: 200000
 
-  - name: "Rapid"
-    bazos_query: "skoda rapid"
-    sauto_model: "skoda:rapid"
-    price_min: 30000
-    price_max: 200000
 
   - name: "Octavia"
     bazos_query: "octavia"
@@ -191,6 +186,9 @@ lovec:
 # Denní souhrn: poslední běh po této hodině (český čas) pošle přehled dne.
 # null = vypnuto
 summary_hour: 21
+
+# Max. nájezd pro všechna hledání i lovce závad (u modelu jde přepsat vlastním km_max)
+km_max: 260000
 
 # true = jen soukromí prodejci, autobazary (AAA Auto apod.) se přeskakují
 only_private: true

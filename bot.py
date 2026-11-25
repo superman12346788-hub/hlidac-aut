@@ -171,7 +171,6 @@ def specs_label(l):
 
 # Rozpoznání modelu z názvu inzerátu -> Sauto (značka:model) pro tržní cenu
 MODELS = [
-    ("skoda rapid", "skoda:rapid", "Škoda Rapid"),
     ("octavia", "skoda:octavia", "Škoda Octavia"),
     ("touareg", "volkswagen:touareg", "VW Touareg"),
     ("audi a3", "audi:a3", "Audi A3"),
@@ -477,7 +476,8 @@ def passes_filters(l, s, cfg):
         return False
     if s.get("year_min") and l["year"] and l["year"] < s["year_min"]:
         return False
-    if s.get("km_max") and l["km"] and l["km"] > s["km_max"]:
+    km_max = s.get("km_max") or cfg.get("km_max")
+    if km_max and l["km"] and l["km"] > km_max:
         return False
     if l["price"] and s.get("price_min") and l["price"] < s["price_min"]:
         return False
@@ -865,6 +865,10 @@ def run_hunter(cfg, seen, now, st, budget):
             continue
         if not l["price"] or l["price"] < h.get("price_min", 5000):
             count(st, "lovec: bez ceny")
+            continue
+        km_max = h.get("km_max") or cfg.get("km_max")
+        if km_max and l["km"] and l["km"] > km_max:
+            count(st, "nájezd nad limit")
             continue
         if h.get("year_min") and l["year"] and l["year"] < h["year_min"]:
             count(st, "filtr (cena/rok/km/palivo)")
